@@ -239,6 +239,102 @@ function exp!(M::Rotations{4}, q, p, X)
     return copyto!(q, p * pinvq)
 end
 
+
+
+
+function get_tridiagonal_elements(trian)
+    N = size(trian, 1)
+    res = zeros(N)
+    down = true
+    for i in 1:N
+        if i == N && down
+            elem = 0
+        else
+            elem = trian[i + (down ? +1 : -1), i]
+        end
+        if elem ≈ 0
+            res[i] = 0
+        else
+            res[i] = elem
+            down = !down
+        end
+    end
+    return res
+end
+
+function ev_diagonal(tridiagonal_elements, unitary; i)
+    a,b = [unitary[:,i] for i in [i, i+1]]
+    evec = [[-b a] * [a b]' ./ sqrt(2)]
+    evals = [0.0]
+    return (values = evals, vectors = evec)
+end
+
+function ev_offdiagonal(tridiagonal_elements, unitary; i, j)
+    a,b,c,d = [unitary[:,i] for i in [i, i+1, j, j+1]]
+    ref = transpose(view(unitary, :, [i,i+1, j,j+1]))
+    evec = [
+        [-c -d a  b] * ref ./ sqrt(4),
+        [-c  d a -b] * ref ./ sqrt(4),
+        [-d -c b  a] * ref ./ sqrt(4),
+        [ d -c b -a] * ref ./ sqrt(4),
+    ]
+    evals = [(tridiagonal_elements[i] - tridiagonal_elements[j])^2 / 4,
+             (tridiagonal_elements[i] + tridiagonal_elements[j])^2 / 4,
+             (tridiagonal_elements[i] + tridiagonal_elements[j])^2 / 4,
+             (tridiagonal_elements[i] - tridiagonal_elements[j])^2 / 4]
+    return (values = evals, vectors = evec)
+end
+
+function ev_zero(tridiagonal_elements, unitary; i)
+    evec = Vector{Array{Float64,2}}()
+    evals = Vector{Float64}()
+    ref = unitary[:, i]
+    for idx in 1:size(unitary,1)
+        if idx != i
+            push!(evec,  (ref * unitary[:, idx]' - unitary[:, idx] * ref') ./ sqrt(2))
+            push!(evals,  tridiagonal_elements[idx]^2 / 4)
+        end
+    end
+    return (values = evals, vectors = evec)
+end
+
+
+function get_basis(M::Rotations{N}, p, B::DiagonalizingOrthonormalBasis{ℝ}) where N
+    trian, unitary, ev = schur(B.frame_direction)
+    trian_elem = get_tridiagonal_elements(trian)
+    evec = Vector{Array{Float64,2}}()
+    evals = Vector{Float64}()
+    i = 1
+    while i <= N
+        if trian_elem[i] == 0
+            evs = ev_zero(trian_elem, unitary, i=i)
+            push!(evec, evs[:vectors]...)
+            push!(evals, evs[:values]...)
+            i += 1
+        else
+            evs = ev_diagonal(trian_elem, unitary, i=i)
+            push!(evec, evs[:vectors]...)
+            push!(evals, evs[:values]...)
+            j = 1
+            while j < i
+                if trian_elem[j] == 0
+                    j += 1
+                else
+                    evs = ev_offdiagonal(trian_elem, unitary, i=i, j=j)
+                    push!(evec, evs[:vectors]...)
+                    push!(evals, evs[:values]...)
+                    j += 2
+                end
+            end
+            i += 2
+        end
+    end
+    return CachedBasis(B, evals, evec)
+end
+
+
+
+
 @doc raw"""
     get_coordinates(M::Rotations, p, X)
 
